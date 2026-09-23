@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.env
+db/nameRecognition.db
+results/
+ENRICHMENT_PLAN.md
+README.md
+data/DATASET.md
+.DS_Store

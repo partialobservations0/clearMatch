@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.pytest_cache/
+
+# The SQLite DB is a compiled artifact, fully regenerable from data/dataset.json via:
+#   scripts/migrate_dataset_to_db.py -> fetch_articles_to_db.py -> add_aliases.py ->
+#   add_aliases_2.py -> generate_all_variants.py
+# (see README.md "Knowledge base"). Not tracked so the repo doesn't carry a rebuilt binary
+# blob in every commit; dataset.json is the real source of truth.
+db/nameRecognition.db
