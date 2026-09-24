@@ -106,6 +106,34 @@ def test_pseudonym_is_not_decomposed():
     # cross-contamination into other generated forms)
 
 
+def test_speculative_middle_name_not_nickname_expanded():
+    """Regression test for a real bug found AFTER the Rowling/pseudonym fix above, in the SAME
+    alias set: 'Joanne Kathleen Rowling' makes 'Kathleen' a genuinely ambiguous middle-position
+    token, so it's tried as both a surname candidate ('Kathleen Rowling', legitimate -- someone
+    could plausibly retain/use it that way) AND a given-name candidate for direct combination.
+    But it was ALSO fed into full nickname substitution, fabricating 'Cassie', 'Cathy', 'Katy',
+    'Kay', 'Kit', 'Kittie', 'Lena', 'Trina' cross-multiplied against her real surnames -- informal
+    nicknames for the generic name 'Kathleen' that have zero real-world connection to Rowling.
+    This is worse than the pseudonym bug: it was silently sitting in the built database (only
+    ever feeding the local pre-check) until live variants were injected directly into the
+    model-facing prompt as supposedly 'verified' context, which is what actually surfaced it.
+    The fix: nickname substitution only runs on given names the generator is actually confident
+    about (canonical name's own tokens, unambiguous given-side tokens) -- never on a token that's
+    itself already a speculative dual-interpretation guess."""
+    aliases = [
+        ("Joanne Rowling", "real_birth_name"),
+        ("Joanne Kathleen Rowling", "commonly_assumed_full_name"),
+        ("Robert Galbraith", "pseudonym_as_input"),
+    ]
+    v = generate_variants("J.K. Rowling", aliases)
+    fabricated_nicknames = ["Cassie", "Cathy", "Katy", "Kay", "Kit", "Kittie", "Lena", "Trina"]
+    for nickname in fabricated_nicknames:
+        assert not any(nickname in x for x in v), f"fabricated nickname {nickname!r} leaked: {[x for x in v if nickname in x]}"
+    # the direct (non-nickname) dual-interpretation forms are still legitimate and expected
+    assert "Kathleen Rowling" in v
+    assert "Rowling, Kathleen" in v
+
+
 def test_nickname_type_alias_not_decomposed():
     """A branded/informal nickname phrase like 'Air Jordan' or 'Big George' must not have its
     first word mined as if it were a real given name (the 'Air'/'Big' noise bug)."""
@@ -120,6 +148,23 @@ def test_title_type_alias_not_decomposed():
     v = generate_variants("Kim Jong Un", aliases)
     assert "Supreme" not in v
     assert "Leader" not in v
+
+
+def test_unrecognized_type_defaults_to_opaque_not_structural():
+    """Regression test for a real bug: 'The Artist Formerly Known As Prince' (Prince's alias,
+    type 'historical_alt_name') was NOT caught by the old denylist-of-opaque-markers approach
+    (no marker substring matched 'historical_alt_name'), so it got decomposed as if 'Artist',
+    'Formerly', 'Known' were given/surname parts -- fabricating dozens of nonsense two-word
+    'names' like 'Formerly Nelson' and 'Artist Prince' out of common English words. The fix:
+    _is_structural_alias is an ALLOWLIST of known-safe types, so any type it has never seen
+    before defaults to opaque (safe -- at worst missed coverage) rather than structural (unsafe
+    -- fabricated garbage)."""
+    aliases = [("The Artist Formerly Known As Prince", "historical_alt_name")]
+    v = generate_variants("Prince Rogers Nelson", aliases)
+    garbage_markers = ["Artist", "Formerly", "Known"]
+    for marker in garbage_markers:
+        assert not any(marker in x for x in v), f"found garbage variant containing {marker!r}: {[x for x in v if marker in x]}"
+    assert _is_structural_alias("some_brand_new_type_nobody_has_seen") is False
 
 
 def test_is_structural_alias_classification():

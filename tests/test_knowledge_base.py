@@ -1,6 +1,7 @@
 """Tests for src/knowledge_base.py. No API calls -- these only exercise local text/DB logic."""
 
 from knowledge_base import looks_non_latin_script, normalize, find_name_forms_in_text
+from name_variants import generate_variants
 
 # Real excerpt from a live Xinhua news article about Xi Jinping (fetched during this project's
 # foreign-language investigation) -- genuinely relevant, zero Latin-script occurrence of his
@@ -63,6 +64,35 @@ def test_real_chinese_article_pre_check_would_have_failed_without_fix():
     found = find_name_forms_in_text(REAL_CHINESE_ARTICLE_EXCERPT, name_forms)
     assert found == []
     assert looks_non_latin_script(REAL_CHINESE_ARTICLE_EXCERPT) is True
+
+
+def test_brand_new_person_gets_live_nickname_coverage():
+    """Regression test for a real gap: name-variant generation used to run ONLY offline
+    (scripts/generate_all_variants.py), so a person not already cataloged in db/ got zero
+    nickname/initials coverage at query time -- only the exact literal input string was ever
+    checked. match.py now also generates variants live, from the input name alone, on every
+    query. This confirms the underlying capability a brand-new (uncataloged) name relies on:
+    an article using a nickname must still be found."""
+    input_name = "Robert James Smith"  # not in db/ -- pretend this is a first-time query
+    article_text = "Bob Smith was seen at the conference yesterday, discussing his research."
+    live_variants = generate_variants(input_name)  # exactly what match.py now does for any query
+    name_forms = [input_name] + list(live_variants)
+    found = find_name_forms_in_text(article_text, name_forms)
+    assert "Bob Smith" in found
+
+
+def test_known_persons_opaque_alias_not_reintroduced_via_live_generation():
+    """Regression test: match.py deliberately generates live variants from the RAW INPUT NAME
+    only, never from a known person's existing DB aliases (which lose their variant_type once
+    loaded into a plain PersonRecord.aliases list of strings). If it ever generated from a
+    known person's full alias list instead, an opaque alias like J.K. Rowling's real pseudonym
+    "Robert Galbraith" would have its first word re-mined as a fake given name on every single
+    query -- the exact bug already fixed once in name_variants.py, reintroduced through a
+    different door. Confirms generating from the input name alone doesn't do this."""
+    live = generate_variants("J.K. Rowling")  # empty aliases, as match.py does
+    garbage_markers = ["Rupert", "Dobbin", "Hobkin"]
+    for marker in garbage_markers:
+        assert not any(marker in x for x in live)
 
 
 def test_apostrophe_normalization_still_works():

@@ -47,17 +47,40 @@ LEADING_TITLES = {"pope", "king", "queen", "prince", "president", "judge", "sena
 # just reordered -- decomposing THAT is not only safe, it's necessary: it's the only place
 # "Elizabeth" (the middle name she actually goes by) exists in machine-readable form, since her
 # canonical_name is stored as the shorter "Liz Truss" with no middle name at all.
-_OPAQUE_TYPE_MARKERS = (
-    "nickname", "pseudonym", "title", "brand", "mononym", "self_appointed",
-    "generated_systematic",  # never re-mine our own generated output -- unbounded feedback loop risk
-)
+#
+# This is an ALLOWLIST, not a denylist, deliberately -- a real second bug (found via the same
+# investigation) showed why. Prince's alias "The Artist Formerly Known As Prince" was typed
+# "historical_alt_name", which a denylist of opaque-marker substrings didn't catch, so it was
+# decomposed as if "Artist"/"Formerly"/"Known" were given/surname parts -- fabricating dozens of
+# nonsense two-word "names" like "Formerly Nelson" and "Artist Prince", common enough English
+# words to inflate false-positive risk on the pre-check. An allowlist fails SAFE: any type not
+# explicitly known to represent "this person's real name, just reordered/abbreviated/
+# transliterated" is treated as opaque by default, at worst costing some missed coverage --
+# never fabricated ones. Extend this set deliberately when a genuinely new structural alias
+# type is introduced; do not widen it with a substring/pattern match.
+_STRUCTURAL_TYPES = {
+    "original", "inverted", "inverted_labeled",
+    "real_birth_name", "historical_birth_name", "commonly_assumed_full_name",
+    "full_formal_name", "full_legal_name", "full_middle_initial", "full_middle_initials",
+    "full_patronymic_name", "full_with_suffix",
+    "maiden_name", "married_name", "married_name_only",
+    "combined_maiden_married", "combined_married_names",
+    "alt_romanization", "alt_transliteration", "historical_alt_romanization",
+    "alt_surname_form", "surname_form",
+    "diacritic_added", "diacritic_dropped",
+    "hyphenated_form", "no_hyphen",
+    "incorrectly_reordered", "native_name_order", "western_name_order",
+    "initials", "spaced_initials", "middle_initial", "middle_initials",
+    "given_name_dropped", "no_middle_name", "middle_name_as_public_name",
+    "particle_dropped", "capitalization_variant", "no_nickname",
+    "suffix_disambiguator", "legal_first_name_only",
+}
 
 
 def _is_structural_alias(variant_type: str | None) -> bool:
     if not variant_type:
         return True  # untyped/plain aliases (e.g. from dataset.json rows) are assumed structural
-    lowered = variant_type.lower()
-    return not any(marker in lowered for marker in _OPAQUE_TYPE_MARKERS)
+    return variant_type.lower() in _STRUCTURAL_TYPES
 
 
 def _load_nickname_map() -> dict[str, set[str]]:
@@ -128,6 +151,17 @@ def generate_variants(
     # parsed from the person's OWN canonical name always genuinely belongs to them.
     surname_candidates = {last}
     given_candidates = {first} | {m for m in middles if len(m) > 3}
+    # Subset of given_candidates trusted enough for NICKNAME substitution specifically.
+    # Nickname expansion compounds one guess (this string IS a given name this person uses)
+    # into many more (and THIS is what they'd be called informally) -- fine when the given
+    # name is unambiguous, but a real bug when it's already a speculative guess. The clearest
+    # case: Rowling's alias "Joanne Kathleen Rowling" makes "Kathleen" a dual-interpretation
+    # middle token (below) so combination forms like "Kathleen Rowling" get generated -- but
+    # nickname-substituting it too produced "Cassie", "Trina", "Kittie" etc. cross-multiplied
+    # against her surnames, fabricated aliases with zero real-world connection to her. Only
+    # names we're actually confident ARE a real given name for this person -- the canonical
+    # name's own tokens, and unambiguous given-side tokens from real aliases -- get expanded.
+    nickname_eligible_givens = set(given_candidates)
 
     for alias, alias_type in typed_aliases + [(canonical_name, "original")]:
         if not _is_structural_alias(alias_type):
@@ -158,6 +192,7 @@ def generate_variants(
             for tok in given_part.strip().split():
                 if len(tok) > 3:
                     given_candidates.add(tok)
+                    nickname_eligible_givens.add(tok)  # comma tells us unambiguously: given side
             continue
 
         _, alias_tokens, _ = _split_name(alias)
@@ -175,14 +210,21 @@ def generate_variants(
             if len(last_tok) > 3:
                 surname_candidates.add(last_tok)
             for tok in alias_tokens[1:-1]:
+                # Genuinely ambiguous (Jacqueline "Kennedy" Onassis-style) -- try both
+                # interpretations for direct combination, but do NOT trust it enough for
+                # nickname expansion (see nickname_eligible_givens comment above).
                 if len(tok) > 3:
                     surname_candidates.add(tok)
                     given_candidates.add(tok)
+            # The FIRST token of a real structural alias is unambiguously a given name
+            # (standard Western convention) -- safe for nickname substitution.
             given_candidates.add(alias_tokens[0])
+            nickname_eligible_givens.add(alias_tokens[0])
         elif len(alias_tokens) == 1 and len(alias_tokens[0]) > 3:
             # A single-word alias (a mononym-shaped structural form, or a short real name) has
-            # no given/surname split to get wrong -- safe to add directly.
+            # no given/surname split to get wrong -- safe to add directly, safe to expand.
             given_candidates.add(alias_tokens[0])
+            nickname_eligible_givens.add(alias_tokens[0])
 
     def add(s: str):
         s = s.strip()
@@ -222,8 +264,9 @@ def generate_variants(
                 add(f"{first} {middle_full} {surname} {suffix_str}")
                 add(f"{first} {middle_initials} {surname} {suffix_str}")  # e.g. "William H. Gates III"
 
-    # nickname substitutions for every known given-name spelling
-    for given in given_candidates:
+    # nickname substitutions -- only for given names we're actually confident about, not
+    # every speculative dual-interpretation guess (see nickname_eligible_givens above)
+    for given in nickname_eligible_givens:
         for nickname in nicknames_for(given):
             nickname_cap = nickname.capitalize()
             for surname in surname_candidates:

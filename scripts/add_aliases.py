@@ -6,9 +6,9 @@ Foreman Sr., Bill Gates Sr., the footballer David Cameron) that the original nam
 augmentation pass didn't cover, since that pass only ran against the 47 primary "match" people.
 Plus a handful of well-known aliases spot-checked as missing elsewhere.
 
-Same verification caveat as the original augmentation pass (see data/DATASET.md): these are
-well-established public facts from general knowledge, not independently re-verified via live
-web search this session. Mechanical forms (initials, inverted order) need no such caveat.
+Same verification caveat as the original augmentation pass: these are well-established public
+facts from general knowledge, not independently re-verified via live web search this session.
+Mechanical forms (initials, inverted order) need no such caveat.
 """
 
 import sqlite3

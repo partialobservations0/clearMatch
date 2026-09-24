@@ -5,8 +5,7 @@ Two ways to run this: Docker (fastest way to try it, no local Python setup) or a
 
 ## Prerequisites
 
-- An Anthropic API key with available credits (console.anthropic.com -> Settings -> Billing).
-  This is billed separately from a Claude.ai/Claude Code subscription -- see "API costs" below.
+- An Anthropic API key (console.anthropic.com -> Settings -> API Keys).
 - Docker, **or** Python 3.10+ if running locally without Docker.
 
 ## Option A: Docker (recommended for a quick check)
@@ -20,7 +19,7 @@ docker build -t namerecognition .
 docker run --rm -e ANTHROPIC_API_KEY=sk-ant-... namerecognition \
     "Simone Biles" "1997-03-14" "https://example.com/some-article"
 
-# Run the local test suite (no API key needed, no API cost -- pure local logic)
+# Run the local test suite (no API key needed -- pure local logic)
 docker run --rm --entrypoint python3 namerecognition -m pytest tests/ -v
 ```
 
@@ -40,7 +39,9 @@ pip install -r requirements.txt
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 
 # Build the knowledge-base DB (run once, and again any time data/dataset.json or the
-# name-variant generator changes)
+# name-variant generator changes). Note: match.py also generates mechanical/nickname variants
+# LIVE for any query, cataloged or not -- this offline build only affects people already known
+# to the DB (grounding context, collision warnings), not the live per-query fallback coverage.
 python3 scripts/migrate_dataset_to_db.py
 python3 scripts/fetch_articles_to_db.py   # network calls -- fetches real article text for eval
 python3 scripts/add_aliases.py
@@ -50,36 +51,24 @@ python3 scripts/generate_all_variants.py
 # Run a single match query
 python3 src/match.py "Simone Biles" "1997-03-14" "https://example.com/some-article"
 
-# Run the local test suite (no API cost)
+# Run the local test suite
 python3 -m pytest tests/ -v
 ```
 
-## Running the full eval (costs real money)
+## Running the full eval
 
 ```bash
-python3 eval/run_eval.py                          # full 290-row dataset, ~$3-5, has a
-                                                    # --max-cost $10 default safety cap
-python3 eval/run_eval.py --sample 30               # cheap sanity check first (~$0.30-0.50)
+python3 eval/run_eval.py                          # full dataset (272 rows)
+python3 eval/run_eval.py --sample 30               # smaller subset
 python3 eval/run_eval.py --category 20_roster_namesake_collision_trap  # just one category
 ```
 
-Re-running after a small code/prompt change is much cheaper than the first run -- identical
-`(name, DOB, article, model, prompt version, db context)` inputs are served from
-`src/match_cache.py`'s cache for $0. See `README.md` -> "Cost controls" for details, and set a
-hard spend limit in the Anthropic Console as a backstop independent of this code.
+Re-running after a small code/prompt change re-uses identical `(name, DOB, article, model,
+prompt version, db context)` answers already recorded in `src/match_cache.py`, rather than
+re-querying the API for rows that were already answered.
 
-## API costs
+## Known open items
 
-The Anthropic **API** (what this project calls) is billed separately from a Claude.ai/Claude
-Code chat subscription -- a Pro/Max plan does not include API credits. Add credits at
-console.anthropic.com -> Settings -> Billing.
-
-## Known open items (see README.md for full detail)
-
-- The foreign-language pre-check fix (`knowledge_base.looks_non_latin_script`) is logic-verified
-  but has not yet been tested against a live API call -- do this first with a small `--sample`
-  run before trusting it at scale.
-- `db/extracted_entities` table exists in the schema but is intentionally unpopulated --
-  populating it requires its own API-cost decision (not yet made).
-- See `ENRICHMENT_PLAN.md` for a planning-only (not implemented) design for automatically
-  researching missing disambiguating details via additional web search.
+- `db/extracted_entities` table exists in the schema but is intentionally unpopulated.
+- The systematic name-variant generator (`src/name_variants.py`) assumes Western first/last name
+  order and can mis-parse a surname-first name it hasn't seen a hand-curated alias for.

@@ -21,6 +21,18 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
 
+    # This type is 100% mechanically reproducible from the structural aliases + canonical name
+    # on file -- nothing hand-curated ever lives under it. Purge and regenerate fresh every run,
+    # rather than only adding new ones, so a generator bugfix (removing a bad variant this logic
+    # used to produce) actually takes effect instead of leaving stale rows from the old logic
+    # sitting in the DB forever (real incident: a nickname-substitution bug produced fabricated
+    # aliases like "Cassie"/"Trina" for J.K. Rowling that a purely-additive run would never clear).
+    deleted = conn.execute(
+        "DELETE FROM name_variants WHERE variant_type = 'generated_systematic'"
+    ).rowcount
+    conn.commit()
+    print(f"purged {deleted} stale generated_systematic rows before regenerating")
+
     people = conn.execute("SELECT id, canonical_name FROM people").fetchall()
 
     added, skipped_dup = 0, 0

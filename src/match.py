@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 import knowledge_base as kb
 import match_cache
+import name_variants
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -205,11 +206,18 @@ class MatchResult:
         return self.raw_error is None
 
 
-def _build_db_context(input_name: str, input_dob: str) -> tuple[str, "kb.PersonRecord | None", list["kb.PersonRecord"]]:
+def _build_db_context(
+    input_name: str, input_dob: str, live_variants: list[str] | None = None
+) -> tuple[str, "kb.PersonRecord | None", list["kb.PersonRecord"]]:
     """Look up our knowledge base for (a) a known person with this exact DOB, whose known
     aliases can help recognize name forms an LLM wouldn't otherwise know, and (b) any OTHER
     real people (different DOB) who share this name string, so the model gets an explicit
-    warning rather than having to infer a collision risk on its own."""
+    warning rather than having to infer a collision risk on its own. `live_variants` (from
+    name_variants.generate_variants(), computed by the caller) are mechanically-derived
+    forms -- included as a SEPARATE, lower-confidence block: unlike known_person.aliases
+    (verified real facts about this specific person), these are generic linguistic
+    possibilities for this name string (any "Robert" could go by "Bob"; that doesn't mean
+    THIS Robert does) -- phrased accordingly so the model doesn't over-trust them."""
     known_person = kb.lookup_by_dob(input_dob)
     same_name_people = kb.lookup_by_name(input_name)
     collisions = [p for p in same_name_people if known_person is None or p.id != known_person.id]
@@ -234,6 +242,21 @@ def _build_db_context(input_name: str, input_dob: str) -> tuple[str, "kb.PersonR
             f"assume a match merely because this name string appears in the article. Verify carefully "
             f"against the specific candidate DOB given ({input_dob}), not just the name."
         )
+    if live_variants:
+        already_covered = {normalize_for_display(input_name)}
+        if known_person:
+            already_covered |= {normalize_for_display(a) for a in known_person.aliases}
+        new_variants = [v for v in live_variants if normalize_for_display(v) not in already_covered]
+        if new_variants:
+            parts.append(
+                f"POSSIBLE ALTERNATE FORMS (generic, NOT verified for this specific person): "
+                f"mechanically-derived name forms this name COULD plausibly take include: "
+                f"{', '.join(sorted(set(new_variants)))}. These are linguistic possibilities "
+                f"(e.g. a common nickname or initials pattern for this name), not confirmed facts "
+                f"about this individual -- if the article uses one of these forms, treat it as a "
+                f"candidate identification worth verifying against the article's own biographical "
+                f"content, same as any other name match, not as pre-confirmed identity evidence."
+            )
 
     return ("\n\n".join(parts), known_person, collisions)
 
@@ -268,18 +291,42 @@ def match_person(
     use_db: bool = True,
     use_cache: bool = True,
 ) -> MatchResult:
-    db_context, known_person, collisions = _build_db_context(input_name, input_dob) if use_db else ("", None, [])
+    # Live-generate mechanical/nickname variants for the RAW INPUT NAME (never for a known
+    # person's existing aliases -- see below for why), computed BEFORE the DB context so both
+    # the pre-check AND the prompt grounding can use them. This closes a real gap: name-variant
+    # generation previously only ever ran offline (scripts/generate_all_variants.py), so a
+    # person NOT already cataloged in db/ got zero nickname/initials coverage at query time --
+    # only the literal typed-in string was ever checked, and only the pre-check benefited from
+    # it, never the model's own prompt. Now every query gets mechanical coverage (initials,
+    # inverted order, real nickname substitutions) both for deciding whether to call the API
+    # AND as explicit (lower-confidence) grounding inside that call.
+    #
+    # Deliberately generating from input_name alone, with an EMPTY alias list, even when
+    # known_person exists: PersonRecord.aliases (from knowledge_base.py) is a flat list of
+    # plain strings with no variant_type attached, and generate_variants() treats untyped
+    # aliases as safe-to-decompose by default. Passing a known person's full alias list here
+    # would re-decompose an opaque identity on every single query (e.g. Rowling's real alias
+    # "Robert Galbraith" would have its first word mined as a fake given name again) -- exactly
+    # the bug fixed in name_variants.py, just reintroduced through a different door. The
+    # DB-stored variants (already correctly type-filtered offline) still apply via
+    # known_person.aliases; this just adds coverage for names not yet in the DB.
+    live_variants = list(name_variants.generate_variants(input_name))
 
-    # Cheap pre-check: does the candidate's name, or any KNOWN alias of theirs, appear
-    # anywhere in the article text at all? If genuinely none of them do, that's strong enough
-    # evidence to skip the API call -- but we route to 'uncertain', never 'no_match', because
-    # our alias list is necessarily incomplete (a real alias we haven't cataloged could still
-    # be the reason for a true match) and a wrong 'no_match' is the one error this product
-    # cannot make. This is deliberately NOT the inverse check (name found => confirmed match):
-    # every false-positive trap in the dataset (e.g. David Cameron PM vs. a namesake) has the
-    # candidate's exact name string present in the article, and only DOB/context reasoning
-    # disambiguates them -- so a name being present must still go through full verification.
-    name_forms = [input_name] + (known_person.aliases if known_person else [])
+    db_context, known_person, collisions = (
+        _build_db_context(input_name, input_dob, live_variants) if use_db else ("", None, [])
+    )
+
+    # Cheap pre-check: does the candidate's name, any KNOWN alias, or any live-generated
+    # variant appear anywhere in the article text at all? If genuinely none of them do, that's
+    # strong enough evidence to skip the API call -- but we route to 'uncertain', never
+    # 'no_match', because our alias list is necessarily incomplete (a real alias we haven't
+    # cataloged could still be the reason for a true match) and a wrong 'no_match' is the one
+    # error this product cannot make. This is deliberately NOT the inverse check (name found =>
+    # confirmed match): every false-positive trap in the dataset (e.g. David Cameron PM vs. a
+    # namesake) has the candidate's exact name string present in the article, and only
+    # DOB/context reasoning disambiguates them -- so a name being present must still go through
+    # full verification.
+    name_forms = [input_name] + (known_person.aliases if known_person else []) + live_variants
     # Search title + body together -- a real bug caught in testing: a UN Women speech
     # transcript by Malala Yousafzai never once says her name in the body text (it's a
     # first-person quote), but the title "Malala Yousafzai's remarks on..." unambiguously

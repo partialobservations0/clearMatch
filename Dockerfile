@@ -11,7 +11,7 @@
 # Run a single match (requires ANTHROPIC_API_KEY -- never bake this into the image):
 #   docker run --rm -e ANTHROPIC_API_KEY=sk-ant-... namerecognition \
 #       "Simone Biles" "1997-03-14" "https://example.com/article"
-# Run the local test suite (no API key needed, no cost):
+# Run the local test suite (no API key needed):
 #   docker run --rm --entrypoint python3 namerecognition -m pytest tests/ -v
 
 FROM python:3.12-slim
