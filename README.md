@@ -1,8 +1,4 @@
-# nameRecognition
-
-Given a person's **name**, **date of birth**, and an article **URL**, determines whether the
-article is about that specific person and, if so, whether it's positive or negative about them.
-
+# clearMatch
 Full setup detail (prerequisites, Docker vs. local venv): see `SETUP.md`.
 
 ## Quick start (Docker)
